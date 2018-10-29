@@ -163,17 +163,52 @@ void RedundantAssignEliminator::run(Block& _ast)
 	remover(_ast);
 }
 
+template <class K, class V, class F>
+std::map<K, V> joinMap(std::map<K, V>&& _a, std::map<K, V>&& _b, F _conflictSolver)
+{
+	// TODO This is still not ideal. Perhaps we should modify in-place?
+	std::map<K, V> out;
+
+	auto ita = _a.begin();
+	auto aend = _a.end();
+	auto itb = _b.begin();
+	auto bend = _b.end();
+
+	while (ita != aend || itb != bend)
+	{
+		if (itb == bend)
+			out.emplace_hint(out.end(), std::move(*ita++));
+		else if (ita == aend)
+			out.emplace_hint(out.end(), std::move(*itb++));
+		else if (ita->first < itb->first)
+			out.emplace_hint(out.end(), std::move(*ita++));
+		else if (itb->first < ita->first)
+			out.emplace_hint(out.end(), std::move(*itb++));
+		else
+		{
+			out.emplace_hint(out.end(), std::move(ita->first), _conflictSolver(
+				std::move(ita->second),
+				std::move(itb->second)
+			));
+			++ita;
+			++itb;
+		}
+	}
+
+	return out;
+}
+
 void RedundantAssignEliminator::join(RedundantAssignEliminator& _other)
 {
-	for (auto& var: _other.m_assignments)
-		if (m_assignments.count(var.first))
-		{
-			map<Assignment const*, State>& assignmentsHere = m_assignments[var.first];
-			for (auto& assignment: var.second)
-				assignmentsHere[assignment.first].join(assignment.second);
-		}
-		else
-			m_assignments[var.first] = std::move(var.second);
+	std::map<string, std::map<Assignment const*, State>> newAssignments;
+	newAssignments = joinMap(std::move(m_assignments), std::move(_other.m_assignments), [](
+		map<Assignment const*, State>&& _assignmentHere,
+		map<Assignment const*, State>&& _assignmentThere
+	) -> map<Assignment const*, State>
+	{
+		return joinMap(std::move(_assignmentHere), std::move(_assignmentThere), State::join);
+	});
+	swap(m_assignments, newAssignments);
 }
 
 void RedundantAssignEliminator::changeUndecidedTo(string const& _variable, RedundantAssignEliminator::State _newState)
